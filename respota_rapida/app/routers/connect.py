@@ -1,9 +1,10 @@
+# app/routers/connect.py
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from ..config import SessionLocal
 from ..models import User, Match, MatchPlayer
-from datetime import datetime
 
 router = APIRouter()
 
@@ -15,40 +16,42 @@ def get_db():
     finally:
         db.close()
 
-# Cria novo usuário
-def create_user(db: Session, username: str):
+# Busca ou cria usuário (evita duplicatas)
+def get_or_create_user(db: Session, username: str):
+    user = db.query(User).filter_by(username=username).first()
+    if user:
+        return user
     user = User(username=username)
     db.add(user)
     db.commit()
     db.refresh(user)
     return user
 
-# Busca jogador esperando partida
-def find_waiting_player(db: Session):
-    # Verifica se há algum jogador sozinho em uma partida não finalizada
-    result = (
+# Busca uma partida que tenha apenas um jogador
+def find_waiting_match(db: Session):
+    return (
         db.query(MatchPlayer.match_id)
-        .join(Match, Match.id == MatchPlayer.match_id)  # Garante que a junção entre Match e MatchPlayer está correta
+        .join(Match, Match.id == MatchPlayer.match_id)
         .group_by(MatchPlayer.match_id)
-        .having(func.count(MatchPlayer.user_id) == 1)  # Usando func.count() de forma correta
+        .having(func.count(MatchPlayer.user_id) == 1)
         .first()
     )
-    return result
 
+# Endpoint para conectar jogador
 @router.post("/connect")
 def connect_player(username: str, db: Session = Depends(get_db)):
     if not username:
         raise HTTPException(status_code=400, detail="Nome de usuário é obrigatório.")
 
-    # Cria novo usuário
-    user = create_user(db, username)
+    # Obtém ou cria usuário
+    user = get_or_create_user(db, username)
 
-    # Tenta encontrar jogador esperando
-    waiting = find_waiting_player(db)
+    # Verifica se existe partida aguardando adversário
+    waiting = find_waiting_match(db)
 
     if waiting:
-        # Reutiliza a partida existente
         match_id = waiting.match_id
+        status_msg = "Partida pronta para iniciar"
     else:
         # Cria nova partida
         new_match = Match()
@@ -56,6 +59,7 @@ def connect_player(username: str, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(new_match)
         match_id = new_match.id
+        status_msg = "Aguardando adversário"
 
     # Registra jogador na partida
     match_player = MatchPlayer(match_id=match_id, user_id=user.id)
@@ -64,8 +68,8 @@ def connect_player(username: str, db: Session = Depends(get_db)):
     db.refresh(match_player)
 
     return {
-        "message": "Jogador conectado",
+        "message": "Jogador conectado com sucesso.",
         "user_id": user.id,
         "match_id": match_id,
-        "status": "Aguardando adversário" if not waiting else "Partida pronta para iniciar"
+        "status": status_msg
     }

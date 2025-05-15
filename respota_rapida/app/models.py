@@ -2,10 +2,9 @@ from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, F
 from sqlalchemy.orm import relationship, declarative_base
 from datetime import datetime
 
-# Base declarativa
 Base = declarative_base()
 
-# Tabela de usuários
+# Usuário
 class User(Base):
     __tablename__ = "users"
 
@@ -19,24 +18,32 @@ class User(Base):
     answered_questions = relationship("MatchQuestion", back_populates="answered_by_user", foreign_keys="MatchQuestion.answered_by_user_id")
 
 
-# Tabela de partidas
+# Partida
 class Match(Base):
     __tablename__ = "matches"
 
     id = Column(Integer, primary_key=True, index=True)
     started_at = Column(DateTime, default=datetime.utcnow)
     finished_at = Column(DateTime, nullable=True)
-    winner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    player1_id = Column(Integer, ForeignKey('match_players.id'))
-    player2_id = Column(Integer, ForeignKey('match_players.id'))
-    start_time = Column(DateTime, default=datetime.utcnow)
 
-    # Relacionamentos
+    # Vencedor da partida
+    winner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     winner = relationship("User", back_populates="matches_won", foreign_keys=[winner_id])
-    players = relationship("MatchPlayer", back_populates="match")
-    questions = relationship("MatchQuestion", back_populates="match")
+
+    # Jogadores principais (apontam para MatchPlayer)
+    player1_id = Column(Integer, ForeignKey("match_players.id"))
+    player2_id = Column(Integer, ForeignKey("match_players.id"))
     player1 = relationship("MatchPlayer", foreign_keys=[player1_id])
     player2 = relationship("MatchPlayer", foreign_keys=[player2_id])
+
+    # Relacionamentos
+    players = relationship("MatchPlayer", back_populates="match", foreign_keys="MatchPlayer.match_id")
+    questions = relationship("MatchQuestion", back_populates="match", foreign_keys="MatchQuestion.match_id")
+
+    # Campos adicionais
+    start_time = Column(DateTime, default=datetime.utcnow)
+    tipo = Column(String(10), default="normal")  # 'normal' ou 'torneio'
+    status = Column(String(20), default="esperando")  # 'esperando', 'em_andamento', 'finalizado'
 
 
 # Jogadores em uma partida
@@ -46,44 +53,45 @@ class MatchPlayer(Base):
     id = Column(Integer, primary_key=True, index=True)
     match_id = Column(Integer, ForeignKey("matches.id"))
     user_id = Column(Integer, ForeignKey("users.id"))
-    score = Column(Integer, default=0)
-    connected_at = Column(DateTime, default=datetime.utcnow)
     name = Column(String, index=True)
-    status = Column(String, default="waiting")  # status do jogador ("waiting", "playing")
+    score = Column(Integer, default=0)
+    status = Column(String, default="waiting")  # 'waiting', 'playing', etc
+    connected_at = Column(DateTime, default=datetime.utcnow)
 
     # Relacionamentos
-    match = relationship("Match", back_populates="players")
-    user = relationship("User", back_populates="match_players")
+    match = relationship("Match", back_populates="players", foreign_keys=[match_id])
+    user = relationship("User", back_populates="match_players", foreign_keys=[user_id])
 
 
-# Perguntas
+# Perguntas do sistema
 class Question(Base):
     __tablename__ = "questions"
 
     id = Column(Integer, primary_key=True, index=True)
-    question_text = Column(String(191), nullable=False)  # reduzido
-    options = Column(String(1000), nullable=False)        # JSON com várias opções, tamanho maior
-    correct_option = Column(String(100), nullable=False)  # reduzido
-    tip = Column(String(255), nullable=True)              # reduzido
+    question_text = Column(String(191), nullable=False)
+    options = Column(String(1000), nullable=False)         # JSON string
+    correct_option = Column(String(100), nullable=False)
+    tip = Column(String(255), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relacionamentos
     match_questions = relationship("MatchQuestion", back_populates="question")
 
 
-# Relação entre partidas e perguntas
+# Relação entre perguntas e partidas
 class MatchQuestion(Base):
     __tablename__ = "match_questions"
 
     id = Column(Integer, primary_key=True, index=True)
     match_id = Column(Integer, ForeignKey("matches.id"))
     question_id = Column(Integer, ForeignKey("questions.id"))
+
     answered_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    selected_option = Column(String(100), nullable=True)  # reduzido
+    selected_option = Column(String(100), nullable=True)
     time_taken = Column(Float, nullable=True)
     is_correct = Column(Boolean, nullable=True)
 
     # Relacionamentos
-    match = relationship("Match", back_populates="questions")
-    question = relationship("Question", back_populates="match_questions")
+    match = relationship("Match", back_populates="questions", foreign_keys=[match_id])
+    question = relationship("Question", back_populates="match_questions", foreign_keys=[question_id])
     answered_by_user = relationship("User", back_populates="answered_questions", foreign_keys=[answered_by_user_id])
