@@ -8,6 +8,9 @@ import random
 
 router = APIRouter()
 
+# ────────────────────────────────
+# DEPENDÊNCIA DO BANCO DE DADOS
+# ────────────────────────────────
 def get_db():
     db = SessionLocal()
     try:
@@ -15,56 +18,31 @@ def get_db():
     finally:
         db.close()
 
-# Entrar na fila do torneio e iniciar chaves quando atingir mínimo
-@router.post("/tournament/join")
-def join_tournament(user_id: int, db: Session = Depends(get_db)):
-    # Buscar torneio esperando ou criar novo
-    tournament = db.query(Tournament).filter(Tournament.status == "esperando").first()
-    if not tournament:
-        tournament = Tournament(status="esperando", tipo="eliminatorio")
-        db.add(tournament)
-        db.commit()
-        db.refresh(tournament)
+# ────────────────────────────────
+# VALIDAÇÃO DE POTÊNCIA DE 2
+# ────────────────────────────────
+def is_power_of_two(n: int) -> bool:
+    return (n & (n - 1) == 0) and n != 0
 
-    # Verificar se usuário já inscrito no torneio
-    inscritos = set()
-    for match in tournament.matches:
-        if match.player1_id:
-            inscritos.add(match.player1_id)
-        if match.player2_id:
-            inscritos.add(match.player2_id)
-
-    if user_id in inscritos:
-        raise HTTPException(status_code=400, detail="Usuário já inscrito no torneio")
-
-    inscritos.add(user_id)
-
-    minimo_jogadores = 4  # pode parametrizar
-
-    if len(inscritos) < minimo_jogadores:
-        return {"message": f"Inscrito no torneio. Aguardando mais jogadores. {len(inscritos)}/{minimo_jogadores}"}
-
-    # Montar chaves (embaralhar e criar duplas)
-    inscritos_list = list(inscritos)
-    random.shuffle(inscritos_list)
+# ────────────────────────────────
+# FUNÇÃO: MONTAR CHAVES INICIAIS
+# ────────────────────────────────
+def montar_chaves(db: Session, tournament: Tournament, inscritos: list[int], minimo_jogadores: int):
+    random.shuffle(inscritos)
 
     for i in range(0, minimo_jogadores, 2):
-        user1_id = inscritos_list[i]
-        user2_id = inscritos_list[i + 1]
+        user1_id = inscritos[i]
+        user2_id = inscritos[i + 1]
 
-        # Criar partida 1x1 (Match)
         match = Match()
         db.add(match)
         db.commit()
         db.refresh(match)
 
-        # Adicionar jogadores à partida
         mp1 = MatchPlayer(match_id=match.id, user_id=user1_id, status="playing")
         mp2 = MatchPlayer(match_id=match.id, user_id=user2_id, status="playing")
         db.add_all([mp1, mp2])
-        db.commit()
 
-        # Criar registro da partida no torneio
         tournament_match = TournamentMatch(
             tournament_id=tournament.id,
             match_id=match.id,
@@ -74,13 +52,48 @@ def join_tournament(user_id: int, db: Session = Depends(get_db)):
         )
         db.add(tournament_match)
 
+    db.commit()
+
+# ────────────────────────────────
+# ROTA: ENTRAR NO TORNEIO
+# ────────────────────────────────
+@router.post("/tournament/join")
+def join_tournament(user_id: int, db: Session = Depends(get_db), minimo_jogadores: int = 4):
+    if not is_power_of_two(minimo_jogadores):
+        raise HTTPException(status_code=400, detail="Número de jogadores deve ser potência de 2 (ex: 4, 8, 16...)")
+
+    tournament = db.query(Tournament).filter(Tournament.status == "esperando").first()
+    if not tournament:
+        tournament = Tournament(status="esperando", tipo="eliminatorio")
+        db.add(tournament)
+        db.commit()
+        db.refresh(tournament)
+
+    inscritos = []
+    for match in tournament.matches:
+        if match.player1_id:
+            inscritos.append(match.player1_id)
+        if match.player2_id:
+            inscritos.append(match.player2_id)
+
+    if user_id in inscritos:
+        raise HTTPException(status_code=400, detail="Usuário já inscrito no torneio")
+
+    inscritos.append(user_id)
+
+    if len(inscritos) < minimo_jogadores:
+        return {"message": f"Inscrito no torneio. Aguardando mais jogadores. {len(inscritos)}/{minimo_jogadores}"}
+
+    montar_chaves(db, tournament, inscritos, minimo_jogadores)
+
     tournament.status = "em_andamento"
     db.commit()
 
     return {"message": f"Torneio iniciado com {minimo_jogadores} jogadores"}
 
-
-# Retorna status e chaves do torneio
+# ────────────────────────────────
+# ROTA: STATUS DO TORNEIO
+# ────────────────────────────────
 @router.get("/tournament/status/{tournament_id}")
 def get_tournament_status(tournament_id: int, db: Session = Depends(get_db)):
     tournament = db.query(Tournament).get(tournament_id)
@@ -104,37 +117,31 @@ def get_tournament_status(tournament_id: int, db: Session = Depends(get_db)):
 
     return data
 
-
-# Serviço para atualizar vencedor da partida e avançar torneio
+# ────────────────────────────────
+# FUNÇÃO: DEFINIR VENCEDOR DE PARTIDA
+# ────────────────────────────────
 def set_match_winner(db: Session, tournament_match_id: int, winner_user_id: int):
     tmatch = db.query(TournamentMatch).filter(TournamentMatch.id == tournament_match_id).first()
     if not tmatch:
         raise ValueError("Partida do torneio não encontrada")
-
     if tmatch.winner_id is not None:
         raise ValueError("Partida já tem vencedor definido")
-
-    # Verificar se winner_user_id é um dos jogadores da partida
     if winner_user_id not in (tmatch.player1_id, tmatch.player2_id):
         raise ValueError("Vencedor informado não é jogador desta partida")
 
-    # Atualizar vencedor da partida
     tmatch.winner_id = winner_user_id
-
-    # Incrementar vitórias do usuário vencedor da partida
     vencedor = db.query(User).get(winner_user_id)
     if vencedor:
         vencedor.vitorias = (vencedor.vitorias or 0) + 1
 
     db.commit()
 
-    tournament = db.query(Tournament).filter(Tournament.id == tmatch.tournament_id).first()
+    tournament = db.query(Tournament).get(tmatch.tournament_id)
     if not tournament:
         raise ValueError("Torneio não encontrado")
 
     rodada_atual = tmatch.round_number
 
-    # Verificar se todas partidas da rodada atual terminaram
     partidas_rodada = db.query(TournamentMatch).filter(
         and_(
             TournamentMatch.tournament_id == tournament.id,
@@ -142,23 +149,18 @@ def set_match_winner(db: Session, tournament_match_id: int, winner_user_id: int)
         )
     ).all()
 
-    todas_terminaram = all(pm.winner_id is not None for pm in partidas_rodada)
-    if not todas_terminaram:
-        return f"Vencedor atualizado para a partida {tournament_match_id}. Aguardando término das outras partidas da rodada {rodada_atual}."
+    if not all(p.winner_id is not None for p in partidas_rodada):
+        return f"Vencedor registrado. Aguardando término das outras partidas da rodada {rodada_atual}."
 
-    # Verificar se rodada atual é a final
     max_round = db.query(TournamentMatch.round_number).filter(
         TournamentMatch.tournament_id == tournament.id
     ).order_by(TournamentMatch.round_number.desc()).first()[0]
 
     if rodada_atual == max_round:
-        # Definir vencedor do torneio e finalizar
-        # Assumindo só uma partida na final
         final_match = partidas_rodada[0]
         tournament.winner_id = final_match.winner_id
         tournament.status = "finalizado"
 
-        # Incrementar vitórias do vencedor do torneio
         vencedor_torneio = db.query(User).get(tournament.winner_id)
         if vencedor_torneio:
             vencedor_torneio.vitorias = (vencedor_torneio.vitorias or 0) + 1
@@ -166,21 +168,19 @@ def set_match_winner(db: Session, tournament_match_id: int, winner_user_id: int)
         db.commit()
         return f"Torneio finalizado! Vencedor: usuário {tournament.winner_id}."
 
-    # Montar próxima rodada com vencedores em pares
+    # Montar próxima rodada
+    vencedores = [p.winner_id for p in partidas_rodada]
     proxima_rodada = rodada_atual + 1
-    vencedores = [pm.winner_id for pm in partidas_rodada]
 
     for i in range(0, len(vencedores), 2):
         player1 = vencedores[i]
         player2 = vencedores[i + 1] if i + 1 < len(vencedores) else None
 
-        # Criar nova partida Match
         nova_match = Match()
         db.add(nova_match)
         db.commit()
         db.refresh(nova_match)
 
-        # Criar TournamentMatch para próxima rodada
         novo_tmatch = TournamentMatch(
             tournament_id=tournament.id,
             match_id=nova_match.id,
@@ -190,7 +190,6 @@ def set_match_winner(db: Session, tournament_match_id: int, winner_user_id: int)
         )
         db.add(novo_tmatch)
 
-        # Criar MatchPlayers (status "waiting" ou "playing" pode ser definido)
         mp1 = MatchPlayer(match_id=nova_match.id, user_id=player1, status="waiting")
         db.add(mp1)
         if player2:
@@ -200,8 +199,9 @@ def set_match_winner(db: Session, tournament_match_id: int, winner_user_id: int)
     db.commit()
     return f"Rodada {rodada_atual} finalizada. Próxima rodada {proxima_rodada} iniciada."
 
-
-# Rota para reportar vencedor da partida
+# ────────────────────────────────
+# ROTA: DEFINIR VENCEDOR DE UMA PARTIDA
+# ────────────────────────────────
 @router.post("/tournament/match/winner")
 def report_match_winner(
     tournament_match_id: int = Body(..., embed=True),
