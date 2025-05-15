@@ -15,7 +15,6 @@ def get_db():
     finally:
         db.close()
 
-
 # Entrar na fila do torneio e iniciar chaves quando atingir mínimo
 @router.post("/tournament/join")
 def join_tournament(user_id: int, db: Session = Depends(get_db)):
@@ -121,6 +120,12 @@ def set_match_winner(db: Session, tournament_match_id: int, winner_user_id: int)
 
     # Atualizar vencedor da partida
     tmatch.winner_id = winner_user_id
+
+    # Incrementar vitórias do usuário vencedor da partida
+    vencedor = db.query(User).get(winner_user_id)
+    if vencedor:
+        vencedor.vitorias = (vencedor.vitorias or 0) + 1
+
     db.commit()
 
     tournament = db.query(Tournament).filter(Tournament.id == tmatch.tournament_id).first()
@@ -152,6 +157,12 @@ def set_match_winner(db: Session, tournament_match_id: int, winner_user_id: int)
         final_match = partidas_rodada[0]
         tournament.winner_id = final_match.winner_id
         tournament.status = "finalizado"
+
+        # Incrementar vitórias do vencedor do torneio
+        vencedor_torneio = db.query(User).get(tournament.winner_id)
+        if vencedor_torneio:
+            vencedor_torneio.vitorias = (vencedor_torneio.vitorias or 0) + 1
+
         db.commit()
         return f"Torneio finalizado! Vencedor: usuário {tournament.winner_id}."
 

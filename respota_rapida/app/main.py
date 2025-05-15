@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from app.database import init_db
-from app.routers import connect, question, tournament  # importa os routers
+from app.routers import connect, question, tournament, ranking  # importa os routers
 
 app = FastAPI(title="Resposta Rápida", version="1.0.0")
 
@@ -12,6 +12,7 @@ init_db()
 app.include_router(connect.router, prefix="/api", tags=["Jogadores"])
 app.include_router(question.router, prefix="/api", tags=["Perguntas"])
 app.include_router(tournament.router, prefix="/api", tags=["Torneio"])
+app.include_router(ranking.router, prefix="/api", tags=["Ranking"])
 
 # Rota raiz
 @app.get("/")
